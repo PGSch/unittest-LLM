@@ -1,5 +1,5 @@
 import ast
-import openai
+from openai import OpenAI
 import pytest
 
 color_prefix_by_role = {
@@ -18,6 +18,7 @@ def unit_tests_from_function(
     execute_model: str = "gpt-3.5-turbo",
     temperature: float = 0.4,
     reruns_if_fail: int = 1,
+    stream: bool = False
 ) -> str:
     """
     Generate unit tests for a given Python function.
@@ -64,12 +65,13 @@ def unit_tests_from_function(
             print_text=True
         )
     """
+    client = OpenAI()
     # Step 1: Generate an explanation of the function
 
     # create a markdown-formatted message that asks GPT to explain the function, formatted as a bullet list
     explain_system_message = {
         "role": "system",
-        "content": "You are a world-class Python developer with an eagle eye for unintended bugs and edge cases. You carefully explain code with great detail and accuracy. You organize your explanations in markdown-formatted, bulleted lists.",
+        "content": "You are a world-class Python developer with an eagle eye for unintended bugs and edge cases. You carefully explain code with great detail and accuracy. You organize your explanations in markdown-formatted, bulleted lists."
     }
     explain_user_message = {
         "role": "user",
@@ -83,19 +85,21 @@ def unit_tests_from_function(
     if print_text:
         print_messages(explain_messages)
 
-    explanation_response = openai.ChatCompletion.create(
-        model=explain_model,
-        messages=explain_messages,
-        temperature=temperature,
-        stream=True,
-    )
+    explanation_response = client.chat.completions.create(model=explain_model,
+                                                          messages=explain_messages,
+                                                          temperature=temperature,
+                                                          stream=False)
     explanation = ""
-    for chunk in explanation_response:
-        delta = chunk["choices"][0]["delta"]
-        if print_text:
-            print_message_delta(delta)
-        if "content" in delta:
-            explanation += delta["content"]
+    if stream:
+        for chunk in explanation_response:
+            delta = chunk.choices[0].delta
+            if print_text:
+                print_message_delta(delta)
+            if "content" in delta:
+                explanation += delta["content"]
+    else:
+        explanation = explanation_response.choices[0].message.content
+        print_message_assistant(explanation)
     explain_assistant_message = {"role": "assistant", "content": explanation}
 
     # Step 2: Generate a plan to write a unit test
@@ -120,19 +124,21 @@ To help unit test the function above, list diverse scenarios that the function s
     ]
     if print_text:
         print_messages([plan_user_message])
-    plan_response = openai.ChatCompletion.create(
-        model=plan_model,
-        messages=plan_messages,
-        temperature=temperature,
-        stream=True,
-    )
+    plan_response = client.chat.completions.create(model=plan_model,
+    messages=plan_messages,
+    temperature=temperature,
+    stream=False)
     plan = ""
-    for chunk in plan_response:
-        delta = chunk["choices"][0]["delta"]
-        if print_text:
-            print_message_delta(delta)
-        if "content" in delta:
-            plan += delta["content"]
+    if stream:
+        for chunk in plan_response:
+            delta = chunk.choices[0].delta
+            if print_text:
+                print_message_delta(delta)
+            if "content" in delta:
+                plan += delta["content"]
+    else:
+        plan = plan_response.choices[0].message.content
+        print_message_assistant(plan)
     plan_assistant_message = {"role": "assistant", "content": plan}
 
     # Step 2b: If the plan is short, ask GPT to elaborate further
@@ -154,19 +160,21 @@ To help unit test the function above, list diverse scenarios that the function s
         ]
         if print_text:
             print_messages([elaboration_user_message])
-        elaboration_response = openai.ChatCompletion.create(
-            model=plan_model,
-            messages=elaboration_messages,
-            temperature=temperature,
-            stream=True,
-        )
+        elaboration_response = client.chat.completions.create(model=plan_model,
+        messages=elaboration_messages,
+        temperature=temperature,
+        stream=False)
         elaboration = ""
-        for chunk in elaboration_response:
-            delta = chunk["choices"][0]["delta"]
-            if print_text:
-                print_message_delta(delta)
-            if "content" in delta:
-                elaboration += delta["content"]
+        if stream:
+            for chunk in elaboration_response:
+                delta = chunk.choices[0].delta
+                if print_text:
+                    print_message_delta(delta)
+                if "content" in delta:
+                    elaboration += delta["content"]
+        else:
+            elaboration = elaboration_response.choices[0].message.content
+            print_message_assistant(elaboration)
         elaboration_assistant_message = {"role": "assistant", "content": elaboration}
 
     # Step 3: Generate the unit test
@@ -209,20 +217,21 @@ import {unit_test_package}  # used for our unit tests
     if print_text:
         print_messages([execute_system_message, execute_user_message])
 
-    execute_response = openai.ChatCompletion.create(
-        model=execute_model,
-        messages=execute_messages,
-        temperature=temperature,
-        stream=True,
-    )
+    execute_response = client.chat.completions.create(model=execute_model,
+    messages=execute_messages,
+    temperature=temperature,
+    stream=False)
     execution = ""
-    for chunk in execute_response:
-        delta = chunk["choices"][0]["delta"]
-        if print_text:
-            print_message_delta(delta)
-        if "content" in delta:
-            execution += delta["content"]
-
+    if stream:
+        for chunk in execute_response:
+            delta = chunk.choices[0].delta
+            if print_text:
+                print_message_delta(delta)
+            if "content" in delta:
+                execution += delta["content"]
+    else:
+        execution = execute_response.choices[0].message.content
+        print_message_assistant(execution)
     # check the output for errors
     code = execution.split("```python")[1].split("```")[0].strip()
     try:
@@ -262,6 +271,27 @@ def print_messages(messages, color_prefix_by_role=color_prefix_by_role):
         color_prefix = color_prefix_by_role[role]
         content = message["content"]
         print(f"{color_prefix}\n[{role}]\n{content}")
+        
+def print_message_assistant(content, color_prefix_by_role=color_prefix_by_role):
+    """
+    Print messages sent to or from GPT.
+
+    Parameters:
+    - content: explanation_response.choices[0].message.content.
+        Output of e.g.,
+                >>> explanation_response = client.chat.completions.create(
+                        model=explain_model,
+                        messages=explain_messages,
+                        temperature=temperature,
+                        stream=False
+                    )
+    - color_prefix_by_role (dict, optional): Color prefixes for different roles (default is provided color scheme).
+
+    Prints messages with color-coded prefixes.
+    """
+    role = 'assistant'
+    color_prefix = color_prefix_by_role[role]
+    print(f"{color_prefix}\n[{role}]\n{content}")
 
 
 def print_message_delta(delta, color_prefix_by_role=color_prefix_by_role):
